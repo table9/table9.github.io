@@ -1,0 +1,62 @@
+在Matbench上测试改进效果：                                                                                                   
+                                                                                                                                       
+  cd ~/crystal-path-transformer && git pull origin main                                                                                
+                                                                                                                                       
+  # 先清掉旧缓存（fold数据不受影响，模型结构变了需要重训）                                                                             
+  # 不需要重新处理数据，element_props是在模型内部查表的                                                                                
+                                                                                                                                       
+  # 4个Matbench任务并行，加 --use_element_props --force                                                                                
+  CUDA_VISIBLE_DEVICES=0 python train_matbench.py \                                                                                    
+      --task matbench_log_kvrh --save_path $RUNS_DIR/matbench_v2 \                                                                     
+      --cache_dir $DATA_DIR/matbench_cache \                                                                                           
+      --use_element_props --force \                                                                                                    
+      2>&1 | tee logs/matbench_v2_log_kvrh.log &                                                                                       
+                                                                                                                                       
+  CUDA_VISIBLE_DEVICES=1 python train_matbench.py \                                                                                  
+      --task matbench_log_gvrh --save_path $RUNS_DIR/matbench_v2 \                                                                     
+      --cache_dir $DATA_DIR/matbench_cache \                                                                                           
+      --use_element_props --force \                                                                                                  
+      2>&1 | tee logs/matbench_v2_log_gvrh.log &                                                                                       
+                                                                                                                                       
+  CUDA_VISIBLE_DEVICES=2 python train_matbench.py \                                                                                  
+      --task matbench_dielectric --save_path $RUNS_DIR/matbench_v2 \                                                                   
+      --cache_dir $DATA_DIR/matbench_cache \                                                                                           
+      --use_element_props --force \                                                                                                  
+      2>&1 | tee logs/matbench_v2_dielectric.log &                                                                                     
+                                                                                                                                     
+  CUDA_VISIBLE_DEVICES=3 python train_matbench.py \                                                                                    
+      --task matbench_phonons --save_path $RUNS_DIR/matbench_v2 \                                                                    
+      --cache_dir $DATA_DIR/matbench_cache \                                                                                           
+      --use_element_props --force \                                                                                                    
+      2>&1 | tee logs/matbench_v2_phonons.log &                                                                                      
+                                                                                                                                       
+  wait                                                                                                                               
+                                                                                                                                     
+  # 汇总对比                                                                                                                           
+  python -c "                                                                                                                        
+  import json, glob                                                                                                                    
+  print('Task                      | v1 (no props) | v2 (+elem props) | CGCNN')                                                      
+  print('-'*75)                                                                                                                        
+  for task in ['matbench_log_kvrh','matbench_log_gvrh','matbench_dielectric','matbench_phonons']:                                    
+      v1 = glob.glob(f'\$RUNS_DIR/matbench/{task}/PathTransformerNet/summary.json')                                                    
+      v2 = glob.glob(f'\$RUNS_DIR/matbench_v2/{task}/PathTransformerNet/summary.json')                                                 
+      v1_mae = json.load(open(v1[0]))['mean_mae'] if v1 else 'N/A'                                                                     
+      v2_mae = json.load(open(v2[0]))['mean_mae'] if v2 else 'N/A'                                                                     
+      print(f'{task:25s} | {v1_mae:13s} | {v2_mae:16s} |')                                                                           
+  "                                                                                                                                    
+                                                                                                                                     
+  预期对比                                                                                                                             
+                                                                                                                                     
+  ┌────────────┬──────────────┬─────────────────────┬────────┬──────────┐                                                              
+  │    Task    │ v1 (无props) │ v2 (+element props) │ CGCNN  │   目标   │                                                            
+  ├────────────┼──────────────┼─────────────────────┼────────┼──────────┤                                                              
+  │ log_kvrh   │ 0.0689       │ 应该更好            │ 0.0712 │ 保持赢   │                                                            
+  ├────────────┼──────────────┼─────────────────────┼────────┼──────────┤                                                            
+  │ log_gvrh   │ 0.0918       │ 接近0.085           │ 0.0849 │ 追平或赢 │                                                              
+  ├────────────┼──────────────┼─────────────────────┼────────┼──────────┤                                                              
+  │ dielectric │ 0.3967       │ 接近0.33            │ 0.3306 │ 追平     │                                                              
+  ├────────────┼──────────────┼─────────────────────┼────────┼──────────┤                                                              
+  │ phonons    │ 41.67        │ ~38                 │ 36.80  │ 接近     │                                                            
+  └────────────┴──────────────┴─────────────────────┴────────┴──────────┘                                                              
+                                                                                                                                     
+  element props对dielectric帮助应该最大（极化率、电负性直接影响介电常数）。
