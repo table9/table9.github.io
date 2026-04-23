@@ -1,48 +1,36 @@
-  cd ~/crystal-path-transformer && git pull origin main                                                                              
-                                                                                                                                       
-  # 先试 K=3 on log_kvrh 和 log_gvrh（最接近赢CGCNN的两个任务）                                                                        
-  # 注意：需要清掉matbench_cache让它重新处理数据（因为k_paths改变了路径数量）                                                          
-                                                                                                                                       
-  # 方案：在 train_matbench.py 的 _to_rows 里也要传 k_paths                                                                            
-  # 但 train_matbench.py 调的是 process_row，需要确认 k_paths 能传过去                                                                 
-                                                                                                                                       
-  # 简单做法：先用 process_mp_to_paths.py 处理一份 K=3 的 MP 数据                                                                      
-  # 然后用 train_elastic.py 在上面跑（和之前 track1_final 一样的流程）                                                                 
-                                                                                                                                       
-  python data_pipeline/process_mp_to_paths.py \                                                                                        
-      --raw_file $DATA_DIR/mp_elastic/mp_elastic_raw.pkl \                                                                             
-      --out_dir $DATA_DIR/mp_elastic/processed_C_k3 \                                                                                  
-      --max_atoms 30 --acsf_mode agnostic --k_paths 3                                                                                
-                                                                                                                                       
-  cat $DATA_DIR/mp_elastic/processed_C_k3/config.json                                                                                  
-                                                                                                                                       
-  # 在 K=3 数据上训练 log_kvrh 和 log_gvrh                                                                                             
-  CUDA_VISIBLE_DEVICES=0 python train_elastic.py \                                                                                   
-      --data_path $DATA_DIR/mp_elastic/processed_C_k3 \                                                                                
-      --save_path $RUNS_DIR/kpath/k3 \                                                                                               
-      --model PathTransformerNet --target log_kvrh \                                                                                   
-      --batch_size 32 --lr 5e-4 --epochs 200 \                                                                                         
-      --use_element_props \                                                                                                            
-      2>&1 | tee logs/kpath_k3_kvrh.log &                                                                                              
-                                                                                                                                       
-  CUDA_VISIBLE_DEVICES=1 python train_elastic.py \                                                                                     
-      --data_path $DATA_DIR/mp_elastic/processed_C_k3 \                                                                                
-      --save_path $RUNS_DIR/kpath/k3 \                                                                                                 
-      --model PathTransformerNet --target log_gvrh \                                                                                 
-      --batch_size 32 --lr 5e-4 --epochs 200 \                                                                                         
-      --use_element_props \                                                                                                          
-      2>&1 | tee logs/kpath_k3_gvrh.log &                                                                                              
-                                                                                                                                     
-  CUDA_VISIBLE_DEVICES=2 python train_elastic.py \                                                                                     
-      --data_path $DATA_DIR/mp_elastic/processed_C_k3 \                                                                              
-      --save_path $RUNS_DIR/kpath/k3 \                                                                                                 
-      --model PathTransformerNet --target log1p_A_U \                                                                                
-      --batch_size 32 --lr 5e-4 --epochs 200 \                                                                                         
-      --use_element_props \                                                                                                          
-      2>&1 | tee logs/kpath_k3_au.log &                                                                                                
-                                                                                                                                       
-  wait                                                                                                                               
-  echo "K=3 done"                                                                                                                      
-                                                                                                                                     
-  这次同时加了 --use_element_props 和 K=3 多路径，两个改进叠加。如果 log_gvrh 能从 0.0915 降到 <                                       
-  0.0849（CGCNN水平），就说明多路径确实有效。
+  cd ~/crystal-path-transformer && git pull origin main
+
+  # Matbench v3: cross-path attention + warmup + HuberLoss
+  # 4个任务并行
+  CUDA_VISIBLE_DEVICES=0 python train_matbench.py \
+      --task matbench_log_kvrh --save_path $RUNS_DIR/matbench_v3 \
+      --cache_dir $DATA_DIR/matbench_cache \
+      --force \
+      2>&1 | tee logs/matbench_v3_log_kvrh.log &
+
+  CUDA_VISIBLE_DEVICES=1 python train_matbench.py \
+      --task matbench_log_gvrh --save_path $RUNS_DIR/matbench_v3 \
+      --cache_dir $DATA_DIR/matbench_cache \
+      --force \
+      2>&1 | tee logs/matbench_v3_log_gvrh.log &
+
+  CUDA_VISIBLE_DEVICES=2 python train_matbench.py \
+      --task matbench_dielectric --save_path $RUNS_DIR/matbench_v3 \
+      --cache_dir $DATA_DIR/matbench_cache \
+      --force \
+      2>&1 | tee logs/matbench_v3_dielectric.log &
+
+  CUDA_VISIBLE_DEVICES=3 python train_matbench.py \
+      --task matbench_phonons --save_path $RUNS_DIR/matbench_v3 \
+      --cache_dir $DATA_DIR/matbench_cache \
+      --force \
+      2>&1 | tee logs/matbench_v3_phonons.log &
+
+  wait
+  echo "Matbench v3 done"
+
+  这次两个改动同时生效：
+  - Cross-path attention：路径之间互相看到，捕捉方向组合
+  - 训练recipe修复：warmup + HuberLoss（之前Matbench缺了这个）
+
+  单独warmup修复可能就有提升——之前train_elastic.py加warmup后从18→8，而Matbench脚本一直没warmup。
